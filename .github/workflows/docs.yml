@@ -51,14 +51,25 @@ jobs:
             echo "::error::WORKSPACE_READ_TOKEN is not set — the gate cannot see the workspace, and a partial check is not a pass"
             exit 1
           fi
-          repos=$(GH_TOKEN="$TOKEN" gh repo list "$OWNER" --limit 100 \
-                    --no-archived --json name -q '.[].name')
+          # The repos the TOKEN can read, private included. `gh repo list`
+          # returns only the public ones for a fine-grained token, and that
+          # failed quietly: the gate ran against half the workspace and passed.
+          repos=$(GH_TOKEN="$TOKEN" gh api --paginate 'user/repos?affiliation=owner' \
+                    -q ".[] | select(.owner.login == \"$OWNER\" and (.archived | not)) | .name")
+          # core is private, so its absence means the private repos are not
+          # visible — the half-workspace case, which must not pass.
+          echo "$repos" | grep -qx core || {
+            echo "::error::the token cannot see the private repos — the gate would check half the workspace"
+            exit 1
+          }
+          n=0
           for r in $repos; do
             [ "$r" = "$SELF" ] && continue
             git clone -q --depth 1 \
               "https://x-access-token:${TOKEN}@github.com/${OWNER}/${r}.git" "ws/$r"
+            n=$((n + 1))
           done
-          test -d ws/core || { echo "::error::could not clone core"; exit 1; }
+          echo "cloned $n sibling repo(s)"
 
       - uses: actions/setup-python@v5
         with:
